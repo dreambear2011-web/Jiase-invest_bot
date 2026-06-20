@@ -3,7 +3,7 @@
  * 지아세 "오늘의 나" 텔레그램 봇.
  *
  * 흐름:
- *  /start → 출생연도 입력 → 힐링모드 선택(가볍게/깊게) → 가입 완료 + 즉시 샘플 발송
+ *  /start → 생년월일 입력 → 힐링모드 선택(가볍게/깊게) → 가입 완료 + 즉시 샘플 발송
  *  매일 07:00(KST) 전체 가입자에게 자동 발송
  *  /오늘  → 즉시 확인
  *  /stop  → 수신 거부
@@ -18,6 +18,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 
 const { todayFortune } = require('./bornbone_today');
+const { getTodayDomain } = require('./sipseong');
 const { pickHeal } = require('./phrases');
 const { upsertUser, getUser, removeUser, getAllUsers } = require('./storage');
 
@@ -29,7 +30,7 @@ if (!TOKEN) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// 진행 중인 온보딩 상태(메모리) — chatId → 'awaiting_year'
+// 진행 중인 온보딩 상태(메모리) — chatId → 'awaiting_birthdate' | 'awaiting_healmode'
 const pending = new Map();
 
 // 위기 개입 트리거 키워드 (모드·상태와 무관하게 항상 최우선)
@@ -62,21 +63,39 @@ const TYPE_BODY = {
      '뜻밖의 도움이 따라올 수 있는 결입니다.'
 };
 
-function buildMessage(birthYear, healMode) {
+const GLYPH_PATH = './today-self-mark.png'; // "오늘의 나" 공통 시그니처 이미지 — 유형·모드 불문 통일
+
+function buildMessageParts(user) {
+  const { birthYear, birthMonth, birthDay } = user;
   const r = todayFortune(birthYear);
   const intro = TYPE_INTRO[r.type] || TYPE_INTRO.B;
   const body = TYPE_BODY[r.type] || TYPE_BODY.B;
+
+  // ③ 오늘의 영역 — 생년월일 전체가 있어야 산출 가능(§59-8). 연도만 있는 기존 가입자는 생략.
+  const domain = getTodayDomain(birthYear, birthMonth, birthDay, new Date(), 'daily');
+  const domainLine = domain
+    ? `\n\n오늘은 특히 '${domain.label}' 쪽에 그 기운이 스며듭니다.`
+    : '';
+
   const dirLine = r.dirLabel
     ? `\n\n오늘은 ${r.dirLabel}의 기운을 가까이 두시면, 흐름이 한결 부드러워집니다.`
     : '';
-  const heal = pickHeal(r.type, healMode);
+  const heal = pickHeal(r.type, user.healMode);
 
-  return (
+  const text =
     `🌅 오늘의 나\n\n` +
     `${intro} ${body}` +
-    `${dirLine}\n\n` +
-    `${heal}`
-  );
+    `${domainLine}` +
+    `${dirLine}`;
+
+  return { text, heal };
+}
+
+async function sendDailyToday(chatId, user) {
+  const { text, heal } = buildMessageParts(user);
+  await bot.sendMessage(chatId, text);
+  // 힐링 멘트는 시그니처 이미지 캡션으로 분리 발송 — "오늘의 마무리 도장" 효과 (투자봇과 동일 패턴)
+  await bot.sendPhoto(chatId, GLYPH_PATH, { caption: heal });
 }
 
 // ── /start : 온보딩 시작 ──
@@ -87,13 +106,26 @@ bot.onText(/\/start/, (msg) => {
     bot.sendMessage(chatId, '이미 가입되어 있습니다. /오늘 로 바로 확인하실 수 있어요. (다시 설정하려면 /stop 후 /start)');
     return;
   }
-  pending.set(chatId, 'awaiting_year');
+  pending.set(chatId, 'awaiting_birthdate');
   bot.sendMessage(chatId,
     '안녕하세요, 지아세 知我世입니다 🙂\n' +
     '매일 아침 당신의 기운을 짧게 전해드립니다.\n\n' +
-    '태어난 해를 숫자 4자리로 보내주세요. (예: 1990)'
+    '생년월일을 숫자 8자리로 보내주세요. (예: 19901225)'
   );
 });
+
+// 8자리 생년월일 문자열 파싱 + 범위 검증
+function parseBirthdate(text) {
+  const t = text.trim();
+  if (!/^\d{8}$/.test(t)) return null;
+  const year = +t.slice(0, 4);
+  const month = +t.slice(4, 6);
+  const day = +t.slice(6, 8);
+  if (year < 1900 || year > 2100) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  return { year, month, day };
+}
 
 // ── /오늘 : 즉시 확인 ──
 bot.onText(/\/오늘/, (msg) => {
@@ -103,7 +135,7 @@ bot.onText(/\/오늘/, (msg) => {
     bot.sendMessage(chatId, '먼저 /start 로 가입해주세요.');
     return;
   }
-  bot.sendMessage(chatId, buildMessage(user.birthYear, user.healMode));
+  sendDailyToday(chatId, user).catch(err => console.error('발송 실패:', err.message));
 });
 
 // ── /stop : 수신 거부 ──
@@ -131,18 +163,21 @@ bot.on('callback_query', (query) => {
 
   if (data === 'heal_off' || data === 'heal_on') {
     const healMode = data === 'heal_on' ? 'on' : 'off';
-    const pendingYear = pending.get(`${chatId}:year`);
-    upsertUser(chatId, {
-      birthYear: pendingYear,
+    const pendingDate = pending.get(`${chatId}:birthdate`); // { year, month, day }
+    const newUser = {
+      birthYear: pendingDate.year,
+      birthMonth: pendingDate.month,
+      birthDay: pendingDate.day,
       healMode,
       joinedAt: new Date().toISOString()
-    });
+    };
+    upsertUser(chatId, newUser);
     pending.delete(chatId);
-    pending.delete(`${chatId}:year`);
+    pending.delete(`${chatId}:birthdate`);
 
     bot.answerCallbackQuery(query.id);
     bot.sendMessage(chatId, '가입이 완료되었습니다. 매일 아침 7시에 전해드릴게요 🙂\n\n오늘의 기운을 먼저 보여드릴게요 —');
-    bot.sendMessage(chatId, buildMessage(pendingYear, healMode));
+    sendDailyToday(chatId, newUser).catch(err => console.error('샘플 발송 실패:', err.message));
   }
 });
 
@@ -158,14 +193,14 @@ bot.on('message', (msg) => {
     return;
   }
 
-  // 온보딩: 출생연도 입력 대기 중
-  if (pending.get(chatId) === 'awaiting_year') {
-    const year = parseInt(text.trim(), 10);
-    if (!year || year < 1900 || year > 2100) {
-      bot.sendMessage(chatId, '연도를 숫자 4자리로 다시 보내주세요. (예: 1990)');
+  // 온보딩: 생년월일 8자리 입력 대기 중
+  if (pending.get(chatId) === 'awaiting_birthdate') {
+    const parsed = parseBirthdate(text);
+    if (!parsed) {
+      bot.sendMessage(chatId, '생년월일을 숫자 8자리로 다시 보내주세요. (예: 19901225)');
       return;
     }
-    pending.set(`${chatId}:year`, year);
+    pending.set(`${chatId}:birthdate`, parsed);
     pending.set(chatId, 'awaiting_healmode');
     bot.sendMessage(chatId, '정화 방식을 골라주세요.', {
       reply_markup: {
@@ -183,7 +218,7 @@ cron.schedule('0 7 * * *', () => {
   const users = getAllUsers();
   Object.entries(users).forEach(([chatId, u]) => {
     if (!u || !u.birthYear) return;
-    bot.sendMessage(chatId, buildMessage(u.birthYear, u.healMode)).catch(err => {
+    sendDailyToday(chatId, u).catch(err => {
       console.error(`발송 실패 (chatId=${chatId}):`, err.message);
     });
   });
