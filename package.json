@@ -1,0 +1,14 @@
+{
+  "name": "jiaseh-today-bot",
+  "version": "1.0.0",
+  "description": "지아세 오늘의 나 — 텔레그램 일일 발송 봇",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
