@@ -3,11 +3,15 @@
  * 지아세 "오늘의 나" 텔레그램 봇.
  *
  * 흐름:
- *  /start → 출생연도 입력 → 힐링모드 선택(가볍게/깊게) → 가입 완료 + 즉시 샘플 발송
+ *  /start → 생년월일 입력(YYYYMMDD) → 힐링모드 선택(가볍게/깊게) → 가입 완료 + 즉시 샘플 발송
  *  매일 07:00(KST) 전체 가입자에게 자동 발송
  *  /오늘  → 즉시 확인
  *  /stop  → 수신 거부
  *  /privacy → 개인정보 처리 안내
+ *
+ * [2026-06-20 변경 — §59-8] 출생연도만 받던 온보딩을 생년월일 전체(시 불필요)로 변경.
+ * ②(내 에너지)와 ⑤(방향) 사이에 ③(오늘의 영역 — 십성 기반) 신설.
+ * 기존 가입자(연도만 저장됨)는 /오늘 또는 /start 시 1회 재입력 요청으로 자연 전환.
  *
  * 실행 전: npm install && cp .env.example .env (BOT_TOKEN 입력) 후 npm start
  */
@@ -18,6 +22,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 
 const { todayFortune } = require('./bornbone_today');
+const { todayArea } = require('./sipseong');
 const { pickHeal } = require('./phrases');
 const { upsertUser, getUser, removeUser, getAllUsers } = require('./storage');
 
@@ -29,7 +34,7 @@ if (!TOKEN) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// 진행 중인 온보딩 상태(메모리) — chatId → 'awaiting_year'
+// 진행 중인 온보딩 상태(메모리) — chatId → 'awaiting_birthdate'
 const pending = new Map();
 
 // 위기 개입 트리거 키워드 (모드·상태와 무관하게 항상 최우선)
@@ -50,18 +55,39 @@ const TYPE_INTRO = {
   C: '오늘은 받쳐주는 결입니다.'
 };
 
-function buildMessage(birthYear, healMode) {
+// ④ 조언 — 십성(영역)별 그라운딩 한 줄 (모드1, 기법명 비노출)
+const SIP_ADVICE = {
+  비겁: '오늘은 남 눈치보다 내 줏대를 먼저 따르셔도 좋습니다.',
+  식상: '오늘은 머릿속에 있는 걸 말이나 글로 꺼내보시면 풀립니다.',
+  재성: '당장 성과를 보려 하지 마세요. 오늘은 쌓아두는 쪽이 맞습니다.',
+  관성: '오늘 생긴 오해는 오늘 풀려 하지 마세요. 한 박자 미루는 게 관계를 지킵니다.',
+  인성: '오늘은 새로 배우거나, 그냥 쉬는 시간을 가지셔도 좋습니다.'
+};
+
+function buildMessage(user) {
+  const { birthYear, birthMonth, birthDay, healMode } = user;
   const r = todayFortune(birthYear);
   const intro = TYPE_INTRO[r.type] || TYPE_INTRO.B;
-  const dirLine = r.dirLabel ? `오늘은 ${r.dirLabel}의 기운을 곁에 두시면 좋습니다.\n` : '';
+  const dirLine = r.dirLabel ? `${r.dirLabel}의 기운을 곁에 두시면 좋습니다.\n` : '';
   const heal = pickHeal(r.type, healMode);
+
+  const area = todayArea(birthYear, birthMonth, birthDay);
+  const areaLine = area
+    ? `\n오늘은 특히 '${area.area}' 쪽이 활성화되는 날입니다.\n${SIP_ADVICE[area.sip]}\n`
+    : ''; // 생월일 미수집 가입자는 ③④ 생략, ①②⑤만 발송(하위호환)
 
   return (
     `🌅 오늘의 나\n\n` +
     `${intro}\n` +
+    `${areaLine}\n` +
     `${dirLine}\n` +
     `${heal}`
   );
+}
+
+// 생월일 미수집 가입자에게 1회 재요청
+function needsBirthdateUpgrade(user) {
+  return user && user.birthYear && (!user.birthMonth || !user.birthDay);
 }
 
 // ── /start : 온보딩 시작 ──
@@ -69,14 +95,21 @@ bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const existing = getUser(chatId);
   if (existing && existing.birthYear) {
+    if (needsBirthdateUpgrade(existing)) {
+      pending.set(chatId, 'awaiting_birthdate_upgrade');
+      bot.sendMessage(chatId,
+        '오늘의 영역(③) 기능이 추가됐어요. 생년월일 8자리로 다시 보내주시면 적용됩니다. (예: 19901225)'
+      );
+      return;
+    }
     bot.sendMessage(chatId, '이미 가입되어 있습니다. /오늘 로 바로 확인하실 수 있어요. (다시 설정하려면 /stop 후 /start)');
     return;
   }
-  pending.set(chatId, 'awaiting_year');
+  pending.set(chatId, 'awaiting_birthdate');
   bot.sendMessage(chatId,
     '안녕하세요, 지아세 知我世입니다 🙂\n' +
     '매일 아침 당신의 기운을 짧게 전해드립니다.\n\n' +
-    '태어난 해를 숫자 4자리로 보내주세요. (예: 1990)'
+    '생년월일을 8자리 숫자로 보내주세요. (예: 19901225, 시간은 몰라도 됩니다)'
   );
 });
 
@@ -88,7 +121,12 @@ bot.onText(/\/오늘/, (msg) => {
     bot.sendMessage(chatId, '먼저 /start 로 가입해주세요.');
     return;
   }
-  bot.sendMessage(chatId, buildMessage(user.birthYear, user.healMode));
+  if (needsBirthdateUpgrade(user)) {
+    pending.set(chatId, 'awaiting_birthdate_upgrade');
+    bot.sendMessage(chatId, '오늘의 영역(③) 기능이 추가됐어요. 생년월일 8자리로 다시 보내주세요. (예: 19901225)');
+    return;
+  }
+  bot.sendMessage(chatId, buildMessage(user));
 });
 
 // ── /stop : 수신 거부 ──
@@ -102,7 +140,7 @@ bot.onText(/\/stop/, (msg) => {
 // ── /privacy : 개인정보 처리 안내 ──
 bot.onText(/\/privacy/, (msg) => {
   bot.sendMessage(msg.chat.id,
-    '수집 항목: 출생연도, 텔레그램 chat ID, 힐링모드 설정값만 저장합니다.\n' +
+    '수집 항목: 생년월일(시 제외), 텔레그램 chat ID, 힐링모드 설정값만 저장합니다.\n' +
     '용도: 매일 발송 콘텐츠 개인화 목적 외 사용하지 않습니다.\n' +
     '삭제: /stop 시 즉시 파기됩니다.\n\n' +
     '※ 본 콘텐츠는 의료행위·심리치료가 아닌 예방적 자기관리 참고용 서비스입니다.'
@@ -116,18 +154,21 @@ bot.on('callback_query', (query) => {
 
   if (data === 'heal_off' || data === 'heal_on') {
     const healMode = data === 'heal_on' ? 'on' : 'off';
-    const pendingYear = pending.get(`${chatId}:year`);
-    upsertUser(chatId, {
-      birthYear: pendingYear,
+    const pendingDate = pending.get(`${chatId}:birthdate`);
+    const user = {
+      birthYear: pendingDate.year,
+      birthMonth: pendingDate.month,
+      birthDay: pendingDate.day,
       healMode,
       joinedAt: new Date().toISOString()
-    });
+    };
+    upsertUser(chatId, user);
     pending.delete(chatId);
-    pending.delete(`${chatId}:year`);
+    pending.delete(`${chatId}:birthdate`);
 
     bot.answerCallbackQuery(query.id);
     bot.sendMessage(chatId, '가입이 완료되었습니다. 매일 아침 7시에 전해드릴게요 🙂\n\n오늘의 기운을 먼저 보여드릴게요 —');
-    bot.sendMessage(chatId, buildMessage(pendingYear, healMode));
+    bot.sendMessage(chatId, buildMessage(user));
   }
 });
 
@@ -143,14 +184,16 @@ bot.on('message', (msg) => {
     return;
   }
 
-  // 온보딩: 출생연도 입력 대기 중
-  if (pending.get(chatId) === 'awaiting_year') {
-    const year = parseInt(text.trim(), 10);
-    if (!year || year < 1900 || year > 2100) {
-      bot.sendMessage(chatId, '연도를 숫자 4자리로 다시 보내주세요. (예: 1990)');
+  const state = pending.get(chatId);
+
+  // 온보딩: 생년월일 입력 대기 중 (신규 가입)
+  if (state === 'awaiting_birthdate') {
+    const parsed = parseBirthdate(text);
+    if (!parsed) {
+      bot.sendMessage(chatId, '생년월일 8자리로 다시 보내주세요. (예: 19901225)');
       return;
     }
-    pending.set(`${chatId}:year`, year);
+    pending.set(`${chatId}:birthdate`, parsed);
     pending.set(chatId, 'awaiting_healmode');
     bot.sendMessage(chatId, '정화 방식을 골라주세요.', {
       reply_markup: {
@@ -160,15 +203,43 @@ bot.on('message', (msg) => {
         ]]
       }
     });
+    return;
+  }
+
+  // 기존 가입자 — 생월일 추가 수집(업그레이드)
+  if (state === 'awaiting_birthdate_upgrade') {
+    const parsed = parseBirthdate(text);
+    if (!parsed) {
+      bot.sendMessage(chatId, '생년월일 8자리로 다시 보내주세요. (예: 19901225)');
+      return;
+    }
+    const user = getUser(chatId) || {};
+    upsertUser(chatId, { ...user, birthYear: parsed.year, birthMonth: parsed.month, birthDay: parsed.day });
+    pending.delete(chatId);
+    bot.sendMessage(chatId, '업데이트되었습니다 🙂 /오늘 로 바로 확인해보세요.');
+    return;
   }
 });
+
+// 8자리 생년월일 문자열 파싱 + 범위 검증
+function parseBirthdate(text) {
+  const t = text.trim();
+  if (!/^\d{8}$/.test(t)) return null;
+  const year = +t.slice(0, 4);
+  const month = +t.slice(4, 6);
+  const day = +t.slice(6, 8);
+  if (year < 1900 || year > 2100) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  return { year, month, day };
+}
 
 // ── 매일 07:00(KST) 전체 가입자 발송 ──
 cron.schedule('0 7 * * *', () => {
   const users = getAllUsers();
   Object.entries(users).forEach(([chatId, u]) => {
     if (!u || !u.birthYear) return;
-    bot.sendMessage(chatId, buildMessage(u.birthYear, u.healMode)).catch(err => {
+    bot.sendMessage(chatId, buildMessage(u)).catch(err => {
       console.error(`발송 실패 (chatId=${chatId}):`, err.message);
     });
   });
