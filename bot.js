@@ -167,7 +167,7 @@ bot.onText(/\/privacy/, (msg) => {
 });
 
 // ── 힐링모드 선택 콜백 ──
-bot.on('callback_query', (query) => {
+bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data; // 'heal_off' | 'heal_on'
 
@@ -186,7 +186,7 @@ bot.on('callback_query', (query) => {
     pending.delete(`${chatId}:birthdate`);
 
     bot.answerCallbackQuery(query.id);
-    bot.sendMessage(chatId, '가입이 완료되었습니다. 매일 아침 7시에 전해드릴게요 🙂\n\n오늘의 기운을 먼저 보여드릴게요 —');
+    await bot.sendMessage(chatId, '가입이 완료되었습니다. 매일 아침 7시에 전해드릴게요 🙂\n\n오늘의 기운을 먼저 보여드릴게요 —');
     sendDailyToday(chatId, newUser).catch(err => console.error('샘플 발송 실패:', err.message));
   }
 });
