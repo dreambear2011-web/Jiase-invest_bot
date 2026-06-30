@@ -3,6 +3,9 @@
  * "오늘의 나" §59-8 / 투자봇 신규 연동용 — 오늘 일진 천간이 내 일간 기준
  * 비겁/식상/재성/관성/인성 중 무엇인지 판별 후 영역(일상어 또는 투자어)로 변환.
  * lunar-javascript 사용 (지아세_랜딩_P3.html과 동일 엔진). 두 봇이 동일 파일 공유.
+ *
+ * v2 — "오늘의 나" 정보량 강화: 영역 설명 1문장(SIP_DAILY_DETAIL) +
+ * 오늘의 행동 조언 1문장(SIP_DAILY_ACTION) 추가. 기존 함수·시그니처는 변경 없음.
  */
 
 'use strict';
@@ -37,6 +40,24 @@ const SIP_TO_INVEST = {
   재성: '손에 바로 잡히는 결',
   관성: '계약·책임이 따라붙는 결',
   인성: '쌓아두고 지키는 결'
+};
+
+// "오늘의 나" — 영역이 왜 활성화되는지 1문장 설명
+const SIP_DAILY_DETAIL = {
+  비겁: '오늘 일진이 당신과 같은 결의 기운이라, 평소보다 더 또렷하게 \'내 방식\'이 드러나는 날입니다.',
+  식상: '오늘 일진이 당신이 만들어내는 쪽 기운과 만나, 표현하고 드러내는 힘이 평소보다 세지는 날입니다.',
+  재성: '오늘 일진이 당신이 다스리는 쪽 기운과 만나, 손에 잡히는 결과 쪽으로 시선이 가는 날입니다.',
+  관성: '오늘 일진이 당신을 다스리는 쪽 기운과 만나, 사람들과의 관계·소속된 자리 쪽으로 신경이 쓰이는 날입니다.',
+  인성: '오늘 일진이 당신을 채워주는 쪽 기운과 만나, 배우고 쉬는 쪽으로 마음이 기우는 날입니다.'
+};
+
+// "오늘의 나" — 십성별 오늘의 행동 조언 1문장
+const SIP_DAILY_ACTION = {
+  비겁: '혼자 결정하고 밀어붙여도 좋은 날입니다. 오늘은 남의 의견보다 내 판단을 믿어보세요.',
+  식상: '미뤄둔 말이나 작업이 있다면, 오늘 한번 꺼내어 보여주기 좋은 때입니다.',
+  재성: '오늘은 정산하거나 마무리 짓는 일을 처리하기 좋습니다.',
+  관성: '오늘은 평소 미뤄둔 연락이나 인사를 챙기면 도움이 됩니다.',
+  인성: '오늘은 새로 배우거나 충분히 쉬는 시간을 가지면 좋습니다.'
 };
 
 function getDayGan(birthYear, birthMonth, birthDay) {
@@ -82,5 +103,5 @@ function getTodayDomain(birthYear, birthMonth, birthDay, date = new Date(), flav
 
 module.exports = {
   getDayGan, getTodayDayGan, getSipseong, getTodayDomain,
-  SIP_TO_AREA, SIP_TO_INVEST
+  SIP_TO_AREA, SIP_TO_INVEST, SIP_DAILY_DETAIL, SIP_DAILY_ACTION
 };
