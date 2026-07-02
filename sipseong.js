@@ -67,8 +67,21 @@ function getDayGan(birthYear, birthMonth, birthDay) {
   return GAN_KR[ganHanja] || ganHanja;
 }
 
+// ⚠️ 서버 타임존 버그 수정[2026-07-01]: Solar.fromDate(date)는 Date를 서버 로컬
+// 타임존 기준으로 년/월/일을 읽는다. Railway 등 UTC 서버에서 KST 07~08시 발송 시
+// UTC로는 아직 전날 22~23시라서 일진이 하루 밀려 계산되는 문제가 있었음(매일 재현).
+// → 타임존 무관하게 항상 Asia/Seoul 달력 기준 연/월/일로 변환 후 Solar.fromYmd 사용.
+function resolveKstYmd(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const get = (t) => +parts.find(p => p.type === t).value;
+  return { y: get('year'), m: get('month'), d: get('day') };
+}
+
 function getTodayDayGan(date = new Date()) {
-  const solar = Solar.fromDate(date);
+  const { y, m, d } = resolveKstYmd(date);
+  const solar = Solar.fromYmd(y, m, d);
   const lunar = solar.getLunar();
   const ganHanja = lunar.getDayGan();
   return GAN_KR[ganHanja] || ganHanja;
@@ -101,7 +114,17 @@ function getTodayDomain(birthYear, birthMonth, birthDay, date = new Date(), flav
   return { sipseong: sip, label };
 }
 
+// "투자봇" — 영역이 왜 활성화되는지 1문장 설명 (포지션 행동 어휘는 investPhrases.js가 전담 —
+// 여기서는 설명만, 별도 행동 지시는 추가하지 않음 — §59-1 법적 경계선 보호)
+const SIP_INVEST_DETAIL = {
+  비겁: '오늘 일진이 당신과 같은 결의 기운이라, 평소보다 더 주도적으로 판단하게 되는 날입니다.',
+  식상: '오늘 일진이 당신이 굴리는 쪽 기운과 만나, 회전·전환 쪽으로 마음이 쏠리는 날입니다.',
+  재성: '오늘 일진이 당신이 다스리는 쪽 기운과 만나, 손에 잡히는 결과 쪽으로 시선이 가는 날입니다.',
+  관성: '오늘 일진이 당신을 다스리는 쪽 기운과 만나, 계약·책임이 따라붙는 결정 쪽으로 무게가 실리는 날입니다.',
+  인성: '오늘 일진이 당신을 채워주는 쪽 기운과 만나, 쌓아두고 지키는 쪽으로 마음이 기우는 날입니다.'
+};
+
 module.exports = {
   getDayGan, getTodayDayGan, getSipseong, getTodayDomain,
-  SIP_TO_AREA, SIP_TO_INVEST, SIP_DAILY_DETAIL, SIP_DAILY_ACTION
+  SIP_TO_AREA, SIP_TO_INVEST, SIP_DAILY_DETAIL, SIP_DAILY_ACTION, SIP_INVEST_DETAIL
 };

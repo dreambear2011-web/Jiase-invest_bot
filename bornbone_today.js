@@ -137,7 +137,15 @@ const TYPE_LABEL = { A: '마찰', B: '정체', C: '확장' };
  */
 function todayFortune(birthYear, dateObj) {
   const d = dateObj || new Date();
-  const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  // ⚠️ 서버 타임존 버그 수정[2026-07-01]: d.getFullYear()/getMonth()/getDate()는 서버
+  // 로컬 타임존(예: Railway UTC) 기준으로 날짜를 읽는다. KST 07~08시 발송 시 UTC로는
+  // 아직 전날이라 일진·구성기학 일반 중궁이 하루 밀려 계산되던 문제 — 매일 재현됨.
+  // → 서버 타임존 무관하게 항상 Asia/Seoul 달력 기준 연/월/일로 변환해서 사용.
+  const kst = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(d);
+  const get = (t) => +kst.find(p => p.type === t).value;
+  const y = get('year'), m = get('month'), day = get('day');
   const honmeisei = calcHonmeisei(birthYear, 6, 15); // 본명성 산출용 기준일(월일은 영향 없음, 연도만 사용)
   const dayChart = generateChart(calcDayCenterStar(y, m, day));
   const type = todayType(honmeisei, dayChart);

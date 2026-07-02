@@ -49,28 +49,83 @@ function containsCrisisKeyword(text) {
   return CRISIS_KEYWORDS.some(k => text.includes(k));
 }
 
-// 랜딩(index.html) "오늘의 나" 위젯과 동일 문장 — 문체·분량 통일
-const TYPE_MESSAGE = {
-  A: '오늘은 부딪히는 기운이 섞여드는 날입니다. 분명히 말했는데 다르게 들리거나, ' +
-     '별일 아닌데 마음이 까끌까끌해질 수 있습니다. 당신이 잘못해서가 아니라 기운이 ' +
-     '엇박자로 흐르는 탓이니, 너무 자책하지 않으셔도 됩니다. 무리해서 밀어붙이기보다 ' +
-     '속도를 살짝 늦추고 한 박자 쉬어가면, 마찰은 생각보다 빠르게 가라앉습니다.',
-  B: '오늘은 흐름이 한 박자 고이는 날입니다. 뭘 해도 평소만큼 진행이 안 되는 느낌이 ' +
-     '들 수 있는데, 이건 멈춤이 아니라 안으로 다져지는 시간입니다. 새로 벌이기보다 ' +
-     '있던 것을 정돈하고 비우면 한결 가벼워집니다. 오늘 조용히 머문 만큼, 며칠 뒤엔 ' +
-     '더 단단한 바탕이 되어 돌아옵니다.',
-  C: '오늘은 당신 쪽으로 기운이 흘러드는 날입니다. 평소보다 일이 잘 풀리고 사람들과의 ' +
-     '말도 잘 통하는 결이라, 미뤄둔 일이 있다면 오늘 한 걸음 밀어붙이기 좋습니다. ' +
-     '다만 너무 욕심내며 한 번에 다 끌어안으려 하지는 마세요. 흐름이 좋을 때일수록 ' +
-     '한 가지씩 야무지게 마무리하는 편이 더 멀리 갑니다.'
+// 랜딩(index.html) "오늘의 나" 위젯과 동일 문장(변형 0) + 추가 변형 2종.
+// ⚠️ 분류는 본명성×당일 9성 회좌(9칸 주기)를 마찰/정체/확장 3버킷으로 묶는 구조라
+//    버킷 자체가 이틀 연속 같은 값으로 나오는 일이 통계적으로 흔함(설계상 정상).
+//    버킷이 같아도 문장이 완전히 똑같아 보이는 문제를 막기 위해 각 버킷에 3개 변형을 두고
+//    날짜 기반으로 회전시킨다(같은 날 재조회 시는 동일 문장 유지, 날짜가 바뀌면 변형도 바뀜).
+const TYPE_MESSAGES = {
+  A: [
+    '오늘은 부딪히는 기운이 섞여드는 날입니다. 분명히 말했는데 다르게 들리거나, ' +
+    '별일 아닌데 마음이 까끌까끌해질 수 있습니다. 당신이 잘못해서가 아니라 기운이 ' +
+    '엇박자로 흐르는 탓이니, 너무 자책하지 않으셔도 됩니다. 무리해서 밀어붙이기보다 ' +
+    '속도를 살짝 늦추고 한 박자 쉬어가면, 마찰은 생각보다 빠르게 가라앉습니다.',
+    '오늘은 톱니가 살짝 어긋나는 날입니다. 평소라면 그냥 넘어갈 일에 마음이 걸리거나, ' +
+    '같은 말도 괜히 날카롭게 들릴 수 있습니다. 이건 당신 탓이 아니라 오늘 흐르는 기운이 ' +
+    '잠시 엇갈리는 것뿐입니다. 답을 서둘러 내기보다 한숨 돌리고 다시 보면, 어긋난 결이 ' +
+    '금방 제자리를 찾습니다.',
+    '오늘은 작은 마찰이 여기저기서 일어나기 쉬운 날입니다. 의도와 다르게 전달되거나, ' +
+    '평소보다 신경이 곤두설 수 있는 흐름입니다. 잘못한 게 있어서가 아니라 오늘의 기운이 ' +
+    '잠시 거칠게 부딪히는 탓입니다. 굳이 정면으로 맞서기보다 잠시 거리를 두면, 부딪힘은 ' +
+    '의외로 쉽게 가라앉습니다.'
+  ],
+  B: [
+    '오늘은 흐름이 한 박자 고이는 날입니다. 뭘 해도 평소만큼 진행이 안 되는 느낌이 ' +
+    '들 수 있는데, 이건 멈춤이 아니라 안으로 다져지는 시간입니다. 새로 벌이기보다 ' +
+    '있던 것을 정돈하고 비우면 한결 가벼워집니다. 오늘 조용히 머문 만큼, 며칠 뒤엔 ' +
+    '더 단단한 바탕이 되어 돌아옵니다.',
+    '오늘은 기운이 잠시 머무르는 날입니다. 평소보다 진도가 더디게 느껴질 수 있지만, ' +
+    '멈춰 있는 게 아니라 안에서 조용히 다져지고 있는 시간입니다. 새 일을 벌이기보다 ' +
+    '묵혀둔 것을 정리하면 마음이 한결 가벼워집니다. 오늘 들인 차분함이 며칠 뒤 더 단단한 ' +
+    '결과로 돌아옵니다.',
+    '오늘은 속도가 자연스럽게 줄어드는 날입니다. 밀어붙여도 잘 안 풀리는 느낌이 들 수 ' +
+    '있는데, 그만큼 안으로 채워지는 시간이기도 합니다. 무리해서 진행시키기보다 미뤄둔 ' +
+    '정리나 점검에 시간을 쓰면 좋습니다. 오늘의 멈춤은 다음 걸음을 더 단단하게 만들어 ' +
+    '줄 시간입니다.'
+  ],
+  C: [
+    '오늘은 당신 쪽으로 기운이 흘러드는 날입니다. 평소보다 일이 잘 풀리고 사람들과의 ' +
+    '말도 잘 통하는 결이라, 미뤄둔 일이 있다면 오늘 한 걸음 밀어붙이기 좋습니다. ' +
+    '다만 너무 욕심내며 한 번에 다 끌어안으려 하지는 마세요. 흐름이 좋을 때일수록 ' +
+    '한 가지씩 야무지게 마무리하는 편이 더 멀리 갑니다.',
+    '오늘은 기운이 당신 쪽으로 트이는 날입니다. 일이 평소보다 수월하게 풀리고, 대화도 ' +
+    '한결 매끄럽게 통하는 결입니다. 미뤄둔 일이 있다면 오늘 한 걸음 내디뎌 보기 좋습니다. ' +
+    '다만 욕심을 한꺼번에 부리기보다, 하나씩 야무지게 마무리하는 쪽이 더 오래갑니다.',
+    '오늘은 흐름이 당신 편으로 흘러드는 날입니다. 평소보다 손이 가벼워지고, 사람들과의 ' +
+    '말도 술술 풀리는 결입니다. 벌여놓은 일이나 미뤄둔 연락을 오늘 밀어붙이면 효과가 ' +
+    '큽니다. 다만 한 번에 다 끌어안기보다, 한 가지씩 마무리해 나가는 편이 더 멀리 갑니다.'
+  ]
 };
+
+// 날짜 기반 결정적 인덱스 — 같은 날 재조회(=/오늘 반복 호출) 시 동일 문장,
+// 날짜가 바뀌면(타입 버킷이 같아도) 변형이 회전. 사람별 편차를 주기 위해
+// chatId/생년을 섞어 같은 날 다른 사용자끼리도 겹치지 않게 한다.
+function pickTypeMessage(type, date, seedKey) {
+  const variants = TYPE_MESSAGES[type] || TYPE_MESSAGES.B;
+  // ⚠️ 변형 회전 키는 타입(A/B/C) 산출과 동일하게 KST 달력일 기준으로 맞춘다.
+  //    UTC epochDay를 쓰면 KST 09:00(=UTC 자정)에 인덱스가 튀어, 같은 날 07:00 자동발송과
+  //    이후 재조회에서 문장이 달라지는 문제가 생김(설계: 같은 날은 동일 문장 유지).
+  const kst = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const g = (t) => +kst.find(p => p.type === t).value;
+  const kstDayNum = Math.floor(Date.UTC(g('year'), g('month') - 1, g('day')) / 86400000);
+  let seed = kstDayNum;
+  if (seedKey) {
+    const key = String(seedKey);
+    for (let i = 0; i < key.length; i++) seed += key.charCodeAt(i);
+  }
+  const idx = ((seed % variants.length) + variants.length) % variants.length;
+  return variants[idx];
+}
 
 const GLYPH_PATH = './today-self-mark.png'; // "오늘의 나" 공통 시그니처 이미지 — 유형·모드 불문 통일
 
-function buildMessageParts(user) {
+function buildMessageParts(user, chatId) {
   const { birthYear, birthMonth, birthDay } = user;
-  const r = todayFortune(birthYear);
-  const message = TYPE_MESSAGE[r.type] || TYPE_MESSAGE.B;
+  const now = new Date();
+  const r = todayFortune(birthYear, now);
+  const message = pickTypeMessage(r.type, now, chatId);
 
   // ① 일주 정체성 한 줄 — 약 30% 확률로만 노출(ilju.js). 매일 노출 시 단정·세뇌 위험 방지.
   const iljuIntro = (birthMonth && birthDay)
@@ -79,7 +134,7 @@ function buildMessageParts(user) {
   const iljuLine = iljuIntro ? `${iljuIntro}\n\n` : '';
 
   // ② 십성 영역 + 활성화 이유 + 오늘의 행동 조언 — 생년월일 전체 필요(§59-8)
-  const domain = getTodayDomain(birthYear, birthMonth, birthDay, new Date(), 'daily');
+  const domain = getTodayDomain(birthYear, birthMonth, birthDay, now, 'daily');
   const domainBlock = domain
     ? `\n\n오늘은 특히 '${domain.label}' 쪽에 그 기운이 스며듭니다. ` +
       `${SIP_DAILY_DETAIL[domain.sipseong] || ''}\n\n` +
@@ -102,7 +157,7 @@ function buildMessageParts(user) {
 }
 
 async function sendDailyToday(chatId, user) {
-  const { text, heal } = buildMessageParts(user);
+  const { text, heal } = buildMessageParts(user, chatId);
   await bot.sendMessage(chatId, text);
   // 힐링 멘트는 시그니처 이미지 캡션으로 분리 발송 — "오늘의 마무리 도장" 효과 (투자봇과 동일 패턴)
   await bot.sendPhoto(chatId, GLYPH_PATH, { caption: heal });
