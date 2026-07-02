@@ -103,7 +103,7 @@ function getIljuInfo(birthYear, birthMonth, birthDay) {
 const INTRO_TEMPLATES = [
   (info) => `오늘은 ${info.ilju} 일주가 가진 결이 유독 또렷하게 느껴지는 날입니다. ${info.gisil}`,
   (info) => `${info.gisil} 이것이 당신의 ${info.ilju} 일주에 새겨진 결입니다.`,
-  (info) => `${info.ilju} 일주에게는, ${info.oneline}는 흐름이 있습니다.`
+  (info) => `${info.ilju} 일주에게는, ${info.oneline}이라는 흐름이 있습니다.`
 ];
 
 /**
