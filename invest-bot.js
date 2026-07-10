@@ -25,6 +25,7 @@
 
 'use strict';
 require('dotenv').config();
+const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 
@@ -43,16 +44,30 @@ if (!TOKEN) {
 }
 
 // [디자인 v4] 레이키 글리프 폐기 — 발행 콘텐츠와 톤 충돌 + 모드1 심볼 노출 이슈 해소.
+// ⚠️ 이미지는 반드시 __dirname 기준 절대경로. 상대경로는 Railway cwd에 따라 sendPhoto가 조용히 실패.
+const IMG = (name) => path.join(__dirname, name);
 // 브랜드 마크(물길+돌탑, 균형·흐름 은유)는 /start 첫인사 전용. 돈·차트·화살표 없음(§59-1).
-const BRAND_MARK = './invest-mark.png';
+const BRAND_MARK = IMG('invest-mark.png');
 // 오행 카드 5종 — 그날 일진 오행에 맞춰 매일 마무리 이미지로 회전(오늘의 나 봇과 동일 세트).
 const ELEMENT_CARD = {
-  木: './card-wood.png',
-  火: './card-fire.png',
-  土: './card-earth.png',
-  金: './card-metal.png',
-  水: './card-water.png'
+  木: IMG('card-wood.png'),
+  火: IMG('card-fire.png'),
+  土: IMG('card-earth.png'),
+  金: IMG('card-metal.png'),
+  水: IMG('card-water.png')
 };
+
+// 시작 시 이미지 파일 존재 점검 — 없으면 빠진 파일을 로그로 바로 확인.
+(function checkImages() {
+  const fs = require('fs');
+  const all = [BRAND_MARK, ...Object.values(ELEMENT_CARD)];
+  const missing = all.filter((p) => !fs.existsSync(p));
+  if (missing.length) {
+    console.warn('[이미지 누락] 아래 파일을 봇 폴더에 넣어주세요:\n' + missing.map((p) => '  - ' + p).join('\n'));
+  } else {
+    console.log('[이미지] 7종 확인 완료');
+  }
+})();
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const pending = new Map(); // chatId → 'awaiting_birthdate'
@@ -139,7 +154,7 @@ async function sendDailyInvest(chatId, user) {
   const card = ELEMENT_CARD[ohang] || ELEMENT_CARD['土'];
   await bot.sendPhoto(chatId, card, {
     caption: `${healMsg}\n\n${DISCLAIMER}`
-  });
+  }).catch((err) => console.error(`[오행카드 발송 실패] ${card} → ${err.message}`));
 }
 
 // ── /start : 온보딩 ──

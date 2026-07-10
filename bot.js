@@ -15,6 +15,7 @@
 
 'use strict';
 require('dotenv').config();
+const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 
@@ -111,16 +112,31 @@ function pickTypeMessage(type, date, seedKey) {
   return variants[idx];
 }
 
+// ⚠️ 이미지는 반드시 __dirname(이 파일이 있는 폴더) 기준 절대경로로. 상대경로('./x.png')는
+//    실행 위치(cwd)에 따라 Railway에서 파일을 못 찾아 sendPhoto가 조용히 실패한다.
+const IMG = (name) => path.join(__dirname, name);
 // 브랜드 마크(일출+산) — /start 첫인사 전용
-const BRAND_MARK = './today-self-mark.png';
+const BRAND_MARK = IMG('today-self-mark.png');
 // 오행 카드 5종 — 그날 일진 오행에 맞춰 매일 마무리 이미지로 회전(발행 콘텐츠와 세계관 통일).
 const ELEMENT_CARD = {
-  木: './card-wood.png',
-  火: './card-fire.png',
-  土: './card-earth.png',
-  金: './card-metal.png',
-  水: './card-water.png'
+  木: IMG('card-wood.png'),
+  火: IMG('card-fire.png'),
+  土: IMG('card-earth.png'),
+  金: IMG('card-metal.png'),
+  水: IMG('card-water.png')
 };
+
+// 시작 시 이미지 파일 존재 점검 — 없으면 어떤 파일이 빠졌는지 로그로 바로 확인.
+(function checkImages() {
+  const fs = require('fs');
+  const all = [BRAND_MARK, ...Object.values(ELEMENT_CARD)];
+  const missing = all.filter((p) => !fs.existsSync(p));
+  if (missing.length) {
+    console.warn('[이미지 누락] 아래 파일을 봇 폴더에 넣어주세요:\n' + missing.map((p) => '  - ' + p).join('\n'));
+  } else {
+    console.log('[이미지] 7종 확인 완료');
+  }
+})();
 
 function buildMessageParts(user, chatId) {
   const { birthYear, birthMonth, birthDay } = user;
@@ -178,7 +194,8 @@ async function sendDailyToday(chatId, user) {
   await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   // 힐링 멘트는 그날 오행 카드 캡션으로 분리 발송 — "오늘의 마무리 도장" + 매일 결이 바뀌는 감성
   const card = ELEMENT_CARD[ohang] || ELEMENT_CARD['土'];
-  await bot.sendPhoto(chatId, card, { caption: heal });
+  await bot.sendPhoto(chatId, card, { caption: heal })
+    .catch((err) => console.error(`[오행카드 발송 실패] ${card} → ${err.message}`));
 }
 
 // ── /start : 온보딩 시작 ──
