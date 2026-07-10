@@ -228,8 +228,8 @@ function parseBirthdate(text) {
   return { year, month, day };
 }
 
-// ── /오늘 : 즉시 확인 ──
-bot.onText(/\/오늘/, (msg) => {
+// ── /오늘 · /today : 즉시 확인 ──
+function handleToday(msg) {
   const chatId = msg.chat.id;
   const user = getUser(chatId);
   if (!user || !user.birthYear) {
@@ -237,10 +237,12 @@ bot.onText(/\/오늘/, (msg) => {
     return;
   }
   sendDailyToday(chatId, user).catch(err => console.error('발송 실패:', err.message));
-});
+}
+bot.onText(/\/오늘/, handleToday);
+bot.onText(/\/today/, handleToday);
 
-// ── /이달 : 이달 남은 흐름 ──
-bot.onText(/\/이달/, (msg) => {
+// ── /이달 · /month : 이달 남은 흐름 ──
+function handleMonth(msg) {
   const chatId = msg.chat.id;
   const user = getUser(chatId);
   if (!user || !user.birthYear) {
@@ -248,7 +250,48 @@ bot.onText(/\/이달/, (msg) => {
     return;
   }
   bot.sendMessage(chatId, buildMonthPreview(user.birthYear), { parse_mode: 'HTML' });
+}
+bot.onText(/\/이달/, handleMonth);
+bot.onText(/\/month/, handleMonth);
+
+// ── /help : 명령 안내 + 링크 ──
+bot.onText(/\/help/, (msg) => {
+  bot.sendMessage(msg.chat.id,
+    '📿 지아세 知我世 — 오늘의 나\n' +
+    '매일 아침, 당신의 오늘 기운을 짧게 전해드립니다.\n\n' +
+    '• /오늘 (/today) — 오늘의 결 다시 보기\n' +
+    '• /이달 (/month) — 이달 남은 날의 흐름\n' +
+    '• /정화 (/heal) — 정화 방식(가볍게/깊게) 바꾸기\n' +
+    '• /stop — 수신 해지\n' +
+    '• /privacy — 개인정보 안내\n\n' +
+    '더 깊이 보고 싶다면\n' +
+    '· 웹: https://jiase.kr\n' +
+    '· 문의(카카오 채널): http://pf.kakao.com/_xnZAxfX\n\n' +
+    '※ 예방적 자기관리 참고용 서비스입니다.',
+    { disable_web_page_preview: true }
+  );
 });
+
+// ── /정화 · /heal : 정화 방식(가볍게/깊게) 변경 ──
+function sendHealModePicker(msg) {
+  const chatId = msg.chat.id;
+  const user = getUser(chatId);
+  if (!user || !user.birthYear) {
+    bot.sendMessage(chatId, '먼저 /start 로 가입해주세요.');
+    return;
+  }
+  const cur = user.healMode === 'on' ? '깊게' : '가볍게';
+  bot.sendMessage(chatId, `지금은 '${cur}'로 설정돼 있어요. 바꾸시겠어요?`, {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '가볍게', callback_data: 'heal_off' },
+        { text: '깊게', callback_data: 'heal_on' }
+      ]]
+    }
+  });
+}
+bot.onText(/\/정화/, sendHealModePicker);
+bot.onText(/\/heal/, sendHealModePicker);
 
 // ── /stop : 수신 거부 ──
 bot.onText(/\/stop/, (msg) => {
@@ -268,14 +311,36 @@ bot.onText(/\/privacy/, (msg) => {
   );
 });
 
-// ── 힐링모드 선택 콜백 ──
+// ── "/" 메뉴 등록 (텔레그램은 영문 명령만 등록 가능 — 한글 /오늘·/이달은 입력은 되나 메뉴 미표시) ──
+bot.setMyCommands([
+  { command: 'today',   description: '오늘의 결 다시 보기' },
+  { command: 'month',   description: '이달 남은 날의 흐름' },
+  { command: 'heal',    description: '정화 방식(가볍게/깊게) 바꾸기' },
+  { command: 'help',    description: '명령 안내 · 링크' },
+  { command: 'stop',    description: '수신 해지' },
+  { command: 'privacy', description: '개인정보 안내' }
+]).catch(err => console.error('setMyCommands 실패:', err.message));
+
+// ── 힐링모드 선택 콜백 (신규 온보딩 + 기존 가입자 /정화 변경 겸용) ──
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data; // 'heal_off' | 'heal_on'
+  if (data !== 'heal_off' && data !== 'heal_on') return;
 
-  if (data === 'heal_off' || data === 'heal_on') {
-    const healMode = data === 'heal_on' ? 'on' : 'off';
-    const pendingDate = pending.get(`${chatId}:birthdate`); // { year, month, day }
+  const healMode = data === 'heal_on' ? 'on' : 'off';
+  const modeLabel = healMode === 'on' ? '깊게' : '가볍게';
+  const pendingDate = pending.get(`${chatId}:birthdate`);
+  const existing = getUser(chatId);
+
+  // 온보딩 상태가 메모리에서 유실된 경우(재배포·재시작 등) — 크래시 대신 안내
+  if (!pendingDate && (!existing || !existing.birthYear)) {
+    bot.answerCallbackQuery(query.id);
+    bot.sendMessage(chatId, '입력 정보가 만료되었어요. /start 로 다시 시작해 주세요.');
+    return;
+  }
+
+  if (pendingDate) {
+    // 신규 온보딩 완료
     const newUser = {
       birthYear: pendingDate.year,
       birthMonth: pendingDate.month,
@@ -286,10 +351,14 @@ bot.on('callback_query', async (query) => {
     upsertUser(chatId, newUser);
     pending.delete(chatId);
     pending.delete(`${chatId}:birthdate`);
-
     bot.answerCallbackQuery(query.id);
     await bot.sendMessage(chatId, '가입이 완료되었습니다. 매일 아침 7시에 전해드릴게요 🙂\n\n오늘의 기운을 먼저 보여드릴게요 —');
     sendDailyToday(chatId, newUser).catch(err => console.error('샘플 발송 실패:', err.message));
+  } else {
+    // 기존 가입자의 정화 방식 변경(/정화)
+    upsertUser(chatId, { ...existing, healMode });
+    bot.answerCallbackQuery(query.id);
+    bot.sendMessage(chatId, `정화 방식을 '${modeLabel}'로 바꿨어요. 다음 발송부터 반영됩니다.`);
   }
 });
 
