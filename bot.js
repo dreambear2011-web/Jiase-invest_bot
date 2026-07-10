@@ -4,15 +4,13 @@
  *
  * 흐름:
  *  /start → 생년월일 입력 → 힐링모드 선택(가볍게/깊게) → 가입 완료 + 즉시 샘플 발송
- *  매일 07:00(KST) 전체 가입자에게 자동 발송
- *  /오늘  → 즉시 확인
- *  /stop  → 수신 거부
- *  /privacy → 개인정보 처리 안내
+ *  매일 07:00(KST) 자동 발송 / /오늘 즉시 확인 / /이달 이달 남은 흐름 / /stop /privacy
  *
- * v2 — 문체 풍부화(랜딩 index.html "오늘의 나" 위젯과 동일 톤·분량으로 통일) +
- * 정보량 강화(60갑자 일주 정체성·십성 영역 설명·행동 조언 추가).
- *
- * 실행 전: npm install && cp .env.example .env (BOT_TOKEN 입력) 후 npm start
+ * v3 — [풍부화] 한 덩어리 줄글 → 블록화(parse_mode:'HTML' + 라벨 + 구분선) +
+ *  "다가오는 5일 흐름" 프리뷰 추가(랜딩보다 살짝 풍성). 산출 로직·문장 풀은 그대로.
+ *  일주 정체성 한 줄은 "오늘의 결" 블록 상단에 병합 → 안 뜨는 날 빈 블록 방지.
+ * v4 — [디자인] 고정 글리프 → 그날 일진 오행 카드 5종 회전(발행 콘텐츠와 세계관 통일).
+ *  브랜드 마크(일출+산)는 /start 첫인사 전용. 레이키 글리프 이슈 해소.
  */
 
 'use strict';
@@ -23,7 +21,9 @@ const cron = require('node-cron');
 const { todayFortune } = require('./bornbone_today');
 const { getTodayDomain, SIP_DAILY_DETAIL, SIP_DAILY_ACTION } = require('./sipseong');
 const { getIljuIntroLine } = require('./ilju');
+const { getTodayOhang } = require('./assetMapping'); // 그날 일진 오행 → 오행 카드 선택
 const { pickHeal } = require('./phrases');
+const { buildWeekPreview, kstMonthDay } = require('./preview');
 const { upsertUser, getUser, removeUser, getAllUsers } = require('./storage');
 
 const TOKEN = process.env.BOT_TOKEN;
@@ -50,10 +50,7 @@ function containsCrisisKeyword(text) {
 }
 
 // 랜딩(index.html) "오늘의 나" 위젯과 동일 문장(변형 0) + 추가 변형 2종.
-// ⚠️ 분류는 본명성×당일 9성 회좌(9칸 주기)를 마찰/정체/확장 3버킷으로 묶는 구조라
-//    버킷 자체가 이틀 연속 같은 값으로 나오는 일이 통계적으로 흔함(설계상 정상).
-//    버킷이 같아도 문장이 완전히 똑같아 보이는 문제를 막기 위해 각 버킷에 3개 변형을 두고
-//    날짜 기반으로 회전시킨다(같은 날 재조회 시는 동일 문장 유지, 날짜가 바뀌면 변형도 바뀜).
+// 마찰/정체/확장 3버킷 각 3변형을 날짜 기반으로 회전(같은 날 동일, 날짜 바뀌면 변형 회전).
 const TYPE_MESSAGES = {
   A: [
     '오늘은 부딪히는 기운이 섞여드는 날입니다. 분명히 말했는데 다르게 들리거나, ' +
@@ -97,14 +94,9 @@ const TYPE_MESSAGES = {
   ]
 };
 
-// 날짜 기반 결정적 인덱스 — 같은 날 재조회(=/오늘 반복 호출) 시 동일 문장,
-// 날짜가 바뀌면(타입 버킷이 같아도) 변형이 회전. 사람별 편차를 주기 위해
-// chatId/생년을 섞어 같은 날 다른 사용자끼리도 겹치지 않게 한다.
+// 날짜 기반 결정적 인덱스 — 같은 날 동일 문장, 날짜 바뀌면 변형 회전. chatId/생년 섞어 사용자별 편차.
 function pickTypeMessage(type, date, seedKey) {
   const variants = TYPE_MESSAGES[type] || TYPE_MESSAGES.B;
-  // ⚠️ 변형 회전 키는 타입(A/B/C) 산출과 동일하게 KST 달력일 기준으로 맞춘다.
-  //    UTC epochDay를 쓰면 KST 09:00(=UTC 자정)에 인덱스가 튀어, 같은 날 07:00 자동발송과
-  //    이후 재조회에서 문장이 달라지는 문제가 생김(설계: 같은 날은 동일 문장 유지).
   const kst = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
   }).formatToParts(date);
@@ -119,7 +111,16 @@ function pickTypeMessage(type, date, seedKey) {
   return variants[idx];
 }
 
-const GLYPH_PATH = './today-self-mark.png'; // "오늘의 나" 공통 시그니처 이미지 — 유형·모드 불문 통일
+// 브랜드 마크(일출+산) — /start 첫인사 전용
+const BRAND_MARK = './today-self-mark.png';
+// 오행 카드 5종 — 그날 일진 오행에 맞춰 매일 마무리 이미지로 회전(발행 콘텐츠와 세계관 통일).
+const ELEMENT_CARD = {
+  木: './card-wood.png',
+  火: './card-fire.png',
+  土: './card-earth.png',
+  金: './card-metal.png',
+  水: './card-water.png'
+};
 
 function buildMessageParts(user, chatId) {
   const { birthYear, birthMonth, birthDay } = user;
@@ -127,40 +128,57 @@ function buildMessageParts(user, chatId) {
   const r = todayFortune(birthYear, now);
   const message = pickTypeMessage(r.type, now, chatId);
 
-  // ① 일주 정체성 한 줄 — 약 30% 확률로만 노출(ilju.js). 매일 노출 시 단정·세뇌 위험 방지.
+  // 일주 정체성 한 줄 — 약 30% 확률(ilju.js). "오늘의 결" 상단에 병합(빈 블록 방지).
   const iljuIntro = (birthMonth && birthDay)
     ? getIljuIntroLine(birthYear, birthMonth, birthDay)
     : null;
-  const iljuLine = iljuIntro ? `${iljuIntro}\n\n` : '';
+  const iljuLine = iljuIntro ? `${iljuIntro}\n` : '';
 
-  // ② 십성 영역 + 활성화 이유 + 오늘의 행동 조언 — 생년월일 전체 필요(§59-8)
+  // 십성 영역 + 활성화 이유 + 오늘의 행동 조언 — 생년월일 전체 필요(§59-8)
   const domain = getTodayDomain(birthYear, birthMonth, birthDay, now, 'daily');
-  const domainBlock = domain
-    ? `\n\n오늘은 특히 '${domain.label}' 쪽에 그 기운이 스며듭니다. ` +
-      `${SIP_DAILY_DETAIL[domain.sipseong] || ''}\n\n` +
-      `오늘 해보면 좋은 것 — ${SIP_DAILY_ACTION[domain.sipseong] || ''}`
+  let domainBlock = '';
+  if (domain) {
+    domainBlock =
+      `<b>오늘 스며드는 곳 · ${domain.label}</b>\n${SIP_DAILY_DETAIL[domain.sipseong] || ''}\n\n` +
+      `<b>오늘 해보면 좋은 것</b>\n${SIP_DAILY_ACTION[domain.sipseong] || ''}\n\n`;
+  }
+
+  const dirBlock = r.dirLabel
+    ? `<b>곁에 두면 좋은 방향</b>\n${r.dirLabel}의 기운을 가까이 두시면 흐름이 한결 부드러워집니다.\n\n`
     : '';
 
-  const dirLine = r.dirLabel
-    ? `\n\n오늘은 ${r.dirLabel}의 기운을 가까이 두시면, 흐름이 한결 부드러워집니다.`
-    : '';
+  const preview = buildWeekPreview(birthYear, 5, now);
   const heal = pickHeal(r.type, user.healMode);
+  const ohang = getTodayOhang(now); // 그날 일진 오행 → 마무리 카드 선택
 
   const text =
-    `🌅 오늘의 나\n\n` +
-    `${iljuLine}` +
-    `${message}` +
+    `🌅 <b>오늘의 나</b> · ${kstMonthDay(now)}\n` +
+    `━━━━━━━━━━\n\n` +
+    `<b>오늘의 결</b>\n${iljuLine}${message}\n\n` +
     `${domainBlock}` +
-    `${dirLine}`;
+    `${dirBlock}` +
+    `${preview}`;
 
-  return { text, heal };
+  return { text, heal, ohang };
+}
+
+/** /이달 — 이달 남은 날 흐름(랜딩 월 캘린더의 텍스트판). */
+function buildMonthPreview(birthYear) {
+  const now = new Date();
+  const y = +new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric' }).format(now);
+  const m = +new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', month: '2-digit' }).format(now);
+  const today = +new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', day: '2-digit' }).format(now);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const remain = daysInMonth - today + 1;
+  return `🗓 <b>${m}월 남은 날의 흐름</b>\n` + buildWeekPreview(birthYear, remain, now).split('\n').slice(1).join('\n');
 }
 
 async function sendDailyToday(chatId, user) {
-  const { text, heal } = buildMessageParts(user, chatId);
-  await bot.sendMessage(chatId, text);
-  // 힐링 멘트는 시그니처 이미지 캡션으로 분리 발송 — "오늘의 마무리 도장" 효과 (투자봇과 동일 패턴)
-  await bot.sendPhoto(chatId, GLYPH_PATH, { caption: heal });
+  const { text, heal, ohang } = buildMessageParts(user, chatId);
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+  // 힐링 멘트는 그날 오행 카드 캡션으로 분리 발송 — "오늘의 마무리 도장" + 매일 결이 바뀌는 감성
+  const card = ELEMENT_CARD[ohang] || ELEMENT_CARD['土'];
+  await bot.sendPhoto(chatId, card, { caption: heal });
 }
 
 // ── /start : 온보딩 시작 ──
@@ -172,11 +190,12 @@ bot.onText(/\/start/, (msg) => {
     return;
   }
   pending.set(chatId, 'awaiting_birthdate');
-  bot.sendMessage(chatId,
+  const welcome =
     '안녕하세요, 지아세 知我世입니다 🙂\n' +
     '매일 아침 당신의 기운을 짧게 전해드립니다.\n\n' +
-    '생년월일을 숫자 8자리로 보내주세요. (예: 19901225)'
-  );
+    '생년월일을 숫자 8자리로 보내주세요. (예: 19901225)';
+  bot.sendPhoto(chatId, BRAND_MARK, { caption: welcome })
+    .catch(() => bot.sendMessage(chatId, welcome)); // 이미지 실패 시 텍스트 폴백
 });
 
 // 8자리 생년월일 문자열 파싱 + 범위 검증
@@ -201,6 +220,17 @@ bot.onText(/\/오늘/, (msg) => {
     return;
   }
   sendDailyToday(chatId, user).catch(err => console.error('발송 실패:', err.message));
+});
+
+// ── /이달 : 이달 남은 흐름 ──
+bot.onText(/\/이달/, (msg) => {
+  const chatId = msg.chat.id;
+  const user = getUser(chatId);
+  if (!user || !user.birthYear) {
+    bot.sendMessage(chatId, '먼저 /start 로 가입해주세요.');
+    return;
+  }
+  bot.sendMessage(chatId, buildMonthPreview(user.birthYear), { parse_mode: 'HTML' });
 });
 
 // ── /stop : 수신 거부 ──
@@ -290,4 +320,4 @@ cron.schedule('0 7 * * *', () => {
   console.log(`[${new Date().toISOString()}] 일일 발송 완료 — 대상 ${Object.keys(users).length}명`);
 }, { timezone: 'Asia/Seoul' });
 
-console.log('지아세 오늘의 나 봇 — 실행 중');
+console.log('지아세 오늘의 나 봇 (v3) — 실행 중');
